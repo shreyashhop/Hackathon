@@ -8,7 +8,8 @@ router = APIRouter(prefix="/repair", tags=["Repair Center"])
 @router.get("/jobs", response_model=List[Dict[str, Any]])
 async def list_jobs(limit: int = 50):
     """Returns list of recent replica repair jobs."""
-    return db.list_repair_jobs(limit=limit)
+    safe_limit = max(1, min(int(limit), 500))
+    return db.list_repair_jobs(limit=safe_limit)
 
 
 @router.get("/jobs/{job_id}")

@@ -1,10 +1,14 @@
 import os
+import re
 import time
 import asyncio
+import traceback
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .core.config import settings
 from .core.events import manager
@@ -21,6 +25,53 @@ from .api.integrity import router as integrity_router
 from .db.database import db
 
 START_TIME = time.time()
+
+# Maximum upload file size (50 MB)
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
+
+# Allowed CORS origins — restrict to known frontend hosts
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+).split(",")
+
+
+# ---------- Regex to scrub filesystem paths from error messages ----------
+_PATH_PATTERN = re.compile(
+    r'(?:[A-Za-z]:)?(?:[/\\]+[\w. @-]+){2,}',
+)
+
+
+def _sanitize_error(detail: str) -> str:
+    """Strip filesystem paths and internal details from error messages."""
+    return _PATH_PATTERN.sub("[path redacted]", str(detail))
+
+
+# ---------- Security Headers Middleware ----------
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adds security-related HTTP headers to every response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws: wss: http: https:; "
+            "frame-ancestors 'none'"
+        )
+        # Remove Server header if present
+        if "Server" in response.headers:
+            del response.headers["Server"]
+        return response
 
 
 @asynccontextmanager
@@ -43,16 +94,36 @@ app = FastAPI(
     description="Coordinator for Vault Distributed Fault-Tolerant Object Storage",
     version="0.1.0",
     lifespan=lifespan,
+    # Disable interactive API docs in Docker production to reduce attack surface
+    docs_url="/docs" if os.getenv("RUNNING_IN_DOCKER") != "true" else None,
+    redoc_url="/redoc" if os.getenv("RUNNING_IN_DOCKER") != "true" else None,
 )
 
-# Enable CORS for frontend and external clients
+# Security headers middleware (outermost — runs last on response, first on headers)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS — restricted origins instead of wildcard
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
+
+
+# ---------- Global Exception Handler — prevent info leakage ----------
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler that prevents internal details from leaking to clients."""
+    # Log the full traceback server-side for debugging
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again later."},
+    )
+
 
 # Include API Routers
 app.include_router(nodes_router)
@@ -70,7 +141,6 @@ def root():
         "service": "Vault Distributed Object Storage Coordinator",
         "version": "0.1.0",
         "status": "online",
-        "docs_url": "/docs",
     }
 
 

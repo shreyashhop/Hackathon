@@ -41,7 +41,7 @@ async def stop_node(node_id: str):
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not reach node {node_id}: {str(exc)}"
+            detail=f"Could not reach node {node_id}"
         )
 
 
@@ -68,7 +68,7 @@ async def recover_node(node_id: str):
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not reach node {node_id}: {str(exc)}"
+            detail=f"Could not reach node {node_id}"
         )
 
 
@@ -99,7 +99,7 @@ async def partition_node(node_id: str):
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not reach node {node_id}: {str(exc)}"
+            detail=f"Could not reach node {node_id}"
         )
 
 
@@ -197,5 +197,5 @@ async def inject_corruption(object_id: str, node_id: str):
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Could not reach node {node_id}: {str(exc)}"
+            detail=f"Could not reach node {node_id}"
         )

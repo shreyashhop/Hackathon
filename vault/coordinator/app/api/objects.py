@@ -1,7 +1,9 @@
 import os
+import re
 import uuid
 import hashlib
 import asyncio
+from urllib.parse import quote
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Response, status
@@ -12,6 +14,32 @@ from ..core.events import manager
 from ..core.replication import select_replica_nodes
 from ..db.database import db
 from .nodes import check_all_nodes
+
+# Maximum upload file size (50 MB default, overrideable via env)
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
+
+# UUID format pattern for object_id validation
+_UUID_PATTERN = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+def _validate_object_id(object_id: str) -> str:
+    """Validate that object_id is a well-formed UUID to prevent injection."""
+    if not object_id or not _UUID_PATTERN.match(object_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid object_id format — must be a valid UUID",
+        )
+    return object_id
+
+
+def _safe_filename_header(filename: str) -> str:
+    """Build a safe Content-Disposition header value using RFC 5987 encoding."""
+    ascii_name = filename.encode('ascii', 'replace').decode('ascii')
+    encoded_name = quote(filename)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
 router = APIRouter(prefix="/objects", tags=["Object Storage"])
 
@@ -54,10 +82,18 @@ async def upload_object(
             detail="Cannot upload an empty (0 byte) file"
         )
 
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_SIZE // (1024*1024)} MB",
+        )
+
     size_bytes = len(content)
     sha256_hash = hashlib.sha256(content).hexdigest()
     if not object_id:
         object_id = str(uuid.uuid4())
+    else:
+        _validate_object_id(object_id)
     content_type = file.content_type or "application/octet-stream"
 
     rf = settings.REPLICATION_FACTOR
@@ -75,11 +111,11 @@ async def upload_object(
         await manager.broadcast("OBJECT_OPERATION_FAILED", {
             "operation": "upload",
             "object_id": object_id,
-            "error": f"Failed checking cluster nodes: {str(e)}",
+            "error": "Failed checking cluster nodes",
         })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to query cluster storage nodes: {str(e)}"
+            detail="Failed to query cluster storage nodes"
         )
 
     # Validate quorum feasibility: at least w_quorum reachable healthy nodes required
@@ -309,11 +345,12 @@ async def list_objects():
 @router.get("/{object_id}", response_model=Dict[str, Any])
 async def get_object_metadata(object_id: str):
     """Returns metadata for a specific object including all replicas."""
+    _validate_object_id(object_id)
     obj = db.get_object(object_id)
     if not obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Object {object_id} not found"
+            detail="Object not found"
         )
     return obj
 
@@ -323,11 +360,12 @@ async def get_object_replicas(object_id: str):
     """
     Returns replica topology, quorum parameters, and replica statuses for an object.
     """
+    _validate_object_id(object_id)
     obj = db.get_object(object_id)
     if not obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Object {object_id} not found"
+            detail="Object not found"
         )
 
     replicas = db.get_replicas_for_object(object_id)
@@ -358,11 +396,12 @@ async def download_object(object_id: str):
        and try another STORED replica.
     5. Return valid bytes upon success.
     """
+    _validate_object_id(object_id)
     obj = db.get_object(object_id)
     if not obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Object {object_id} not found"
+            detail="Object not found"
         )
 
     replicas = db.get_replicas_for_object(object_id)
@@ -493,7 +532,7 @@ async def download_object(object_id: str):
                     content=data,
                     media_type=obj.get("content_type", "application/octet-stream"),
                     headers={
-                        "Content-Disposition": f'attachment; filename="{obj["object_name"]}"',
+                        "Content-Disposition": _safe_filename_header(obj["object_name"]),
                         "Content-Length": str(len(data)),
                         "X-Vault-Sha256": obj["sha256"],
                         "X-Vault-Serving-Node": nid,
@@ -516,7 +555,7 @@ async def download_object(object_id: str):
 
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        detail=f"All stored replicas failed during download: {'; '.join(download_errors)}"
+        detail="All stored replicas failed during download"
     )
 
 
@@ -528,11 +567,12 @@ async def delete_object(object_id: str):
     2. Deletes replica records and object metadata from SQLite catalog.
     3. Emits REPLICA_DELETE and OBJECT_DELETED events.
     """
+    _validate_object_id(object_id)
     obj = db.get_object(object_id)
     if not obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Object {object_id} not found"
+            detail="Object not found"
         )
 
     replicas = db.get_replicas_for_object(object_id)

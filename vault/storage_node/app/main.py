@@ -1,10 +1,13 @@
 import os
 import time
 import asyncio
+import traceback
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from .store import LocalStore
@@ -34,20 +37,57 @@ async def lifespan(app: FastAPI):
     print(f"[{NODE_ID}] Storage node shutting down")
 
 
+# CORS — restricted to coordinator and frontend origins
+_CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+).split(",")
+
+
+class StorageSecurityHeaders(BaseHTTPMiddleware):
+    """Adds security-related HTTP headers to every storage node response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cache-Control"] = "no-store"
+        if "Server" in response.headers:
+            del response.headers["Server"]
+        return response
+
+
 app = FastAPI(
     title=f"Vault Storage Node ({NODE_ID})",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None,   # No docs exposure on storage nodes
+    redoc_url=None,
 )
 
-# Enable CORS for frontend & coordinator interactions
+# Security headers
+app.add_middleware(StorageSecurityHeaders)
+
+# Enable CORS for coordinator interactions
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
+
+
+# ---------- Global Exception Handler — prevent info leakage ----------
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler that prevents internal details from leaking."""
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred."},
+    )
 
 
 @app.middleware("http")
@@ -90,7 +130,6 @@ def health():
         "node_id": NODE_ID,
         "status": "healthy",
         "port": NODE_PORT,
-        "data_dir": NODE_DATA_DIR,
         "uptime_seconds": uptime,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "capacity": capacity,
@@ -123,7 +162,7 @@ async def store_object(object_id: str, request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to write object: {str(e)}"
+            detail="Failed to write object"
         )
 
 
@@ -142,7 +181,7 @@ async def retrieve_object(object_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal storage error")
 
 
 @app.delete("/delete/{object_id}")
@@ -164,7 +203,7 @@ async def delete_object(object_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal storage error")
 
 
 @app.get("/checksum/{object_id}")
@@ -185,7 +224,7 @@ async def get_checksum(object_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal storage error")
 
 
 @app.get("/manifest")
@@ -231,11 +270,11 @@ async def fault_corrupt(object_id: str):
             **res,
         }
     except FileNotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object not found on node")
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Corruption operation failed")
 
 
 @app.post("/fault/partition")

@@ -374,15 +374,25 @@ class MetadataDatabase:
             conn.commit()
         return self.get_repair_job(job["job_id"])
 
+    # Whitelist of columns that may be updated on repair_jobs
+    _REPAIR_JOB_UPDATABLE_COLUMNS = frozenset({
+        "status", "bytes_transferred", "source_sha256", "target_sha256",
+        "error", "started_at", "completed_at",
+    })
+
     def update_repair_job(self, job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Updates fields of an existing repair job."""
+        """Updates fields of an existing repair job. Only whitelisted columns are accepted."""
         if not updates:
             return self.get_repair_job(job_id)
         set_clauses = []
         params = []
         for k, v in updates.items():
+            if k not in self._REPAIR_JOB_UPDATABLE_COLUMNS:
+                raise ValueError(f"Column '{k}' is not an allowed update target for repair_jobs")
             set_clauses.append(f"{k} = ?")
             params.append(v)
+        if not set_clauses:
+            return self.get_repair_job(job_id)
         params.append(job_id)
 
         with self.get_connection() as conn:
@@ -401,9 +411,11 @@ class MetadataDatabase:
 
     def list_repair_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Lists recent repair jobs."""
+        # Clamp limit to a safe range
+        safe_limit = max(1, min(int(limit), 500))
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM repair_jobs ORDER BY created_at DESC LIMIT ?", (limit,))
+            cursor.execute("SELECT * FROM repair_jobs ORDER BY created_at DESC LIMIT ?", (safe_limit,))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_all_replicas(self, status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
