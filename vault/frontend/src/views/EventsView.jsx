@@ -14,14 +14,20 @@ import {
 
 function getEventBadge(eventType) {
   const t = (eventType || '').toUpperCase();
-  if (t.includes('COMPLETED') || t.includes('STORED') || t.includes('PASSED') || t.includes('RECOVERED')) {
+  if (t.includes('COMPLETED') || t.includes('STORED') || t.includes('PASSED') || t.includes('RECOVERED') || t.includes('HEALTHY')) {
     return { color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0', icon: CheckCircle2 };
+  }
+  if (t.includes('PARTITION') || t.includes('RECONCIL')) {
+    return { color: '#EA580C', bg: '#FFF7ED', border: '#FED7AA', icon: AlertTriangle };
   }
   if (t.includes('CORRUPT') || t.includes('DOWN') || t.includes('FAILED') || t.includes('DELETED')) {
     return { color: '#EF4444', bg: '#FEF2F2', border: '#FECACA', icon: XCircle };
   }
   if (t.includes('SUSPECT') || t.includes('WARNING') || t.includes('QUEUED') || t.includes('SCAN')) {
     return { color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A', icon: AlertTriangle };
+  }
+  if (t.includes('RECOVERING')) {
+    return { color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE', icon: Activity };
   }
   return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', icon: Activity };
 }

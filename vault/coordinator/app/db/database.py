@@ -275,6 +275,9 @@ class MetadataDatabase:
             cursor.execute("SELECT COUNT(*) FROM object_replicas WHERE status = 'FAILED'")
             failed_replicas = cursor.fetchone()[0]
 
+            cursor.execute("SELECT COUNT(*) FROM object_replicas WHERE status = 'PARTITIONED'")
+            partitioned_replicas = cursor.fetchone()[0]
+
             # Replica distribution per storage node
             cursor.execute("""
                 SELECT node_id, COUNT(*) as count
@@ -295,8 +298,20 @@ class MetadataDatabase:
                 "corrupt_replicas": corrupt_replicas,
                 "unavailable_replicas": unavailable_replicas,
                 "failed_replicas": failed_replicas,
+                "partitioned_replicas": partitioned_replicas,
                 "replica_distribution": distribution,
             }
+
+    def get_replica(self, object_id: str, node_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a single replica record by object_id and node_id."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM object_replicas WHERE object_id = ? AND node_id = ?",
+                (object_id, node_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def delete_replica(self, object_id: str, node_id: str) -> bool:
         """Deletes a specific replica record."""

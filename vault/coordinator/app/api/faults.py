@@ -72,6 +72,53 @@ async def recover_node(node_id: str):
         )
 
 
+@router.post("/node/{node_id}/partition")
+async def partition_node(node_id: str):
+    """
+    Controlled fault injection: Instructs a storage node to simulate network partition / communication isolation.
+    The coordinator's health monitor will detect the failure on its next heartbeats and transition HEALTHY -> SUSPECT -> PARTITIONED.
+    """
+    node_cfg = get_node_config(node_id)
+    url = f"{node_cfg['url']}/fault/partition"
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            res = await client.post(url)
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail=f"Failed to inject partition on node {node_id}")
+
+            # Immediately update health monitor state
+            await health_monitor.partition_node(node_id)
+
+            return {
+                "node_id": node_id,
+                "action": "partition",
+                "status": "partitioned",
+                "message": f"Node {node_id} is now network-partitioned. Communication is isolated while the node stays alive.",
+            }
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach node {node_id}: {str(exc)}"
+        )
+
+
+@router.post("/node/{node_id}/restore")
+async def restore_partition(node_id: str):
+    """
+    Controlled fault recovery: Restores network communication for a partitioned storage node.
+    Triggers reconciliation: detects missing, stale, or deleted replicas, restores RF=3, and returns node to HEALTHY.
+    """
+    get_node_config(node_id)
+    await health_monitor.restore_node_partition(node_id)
+    return {
+        "node_id": node_id,
+        "action": "restore",
+        "status": "recovering",
+        "message": f"Network communication to node {node_id} restored. Reconciliation initiated (RECOVERING -> HEALTHY).",
+    }
+
+
 @router.get("")
 async def get_faults_summary():
     """Returns cluster nodes with their current simulation and health states."""
@@ -82,6 +129,7 @@ async def get_faults_summary():
                 "node_id": n["node_id"],
                 "status": n["status"],
                 "failed_heartbeats": n["failed_heartbeats"],
+                "is_partitioned": health_monitor.is_node_partitioned(n["node_id"]),
                 "error": n["error"],
             }
             for n in nodes

@@ -197,6 +197,77 @@ class RepairManager:
         await self._queue.put(job_record)
         print(f"[RepairManager] Enqueued corruption repair job {job_id} for {object_id}: {source_node} -> {corrupt_node_id}")
 
+    async def trigger_partition_reconciliation(self, object_id: str, target_node_id: str):
+        """
+        Triggered when a recovered partitioned node needs to be reconciled
+        for missing, stale, or checksum-mismatched replicas.
+        """
+        print(f"[RepairManager] Triggering partition reconciliation for object {object_id} on node {target_node_id}")
+        obj = db.get_object(object_id)
+        if not obj:
+            print(f"[RepairManager] Object {object_id} not found in catalog")
+            return
+
+        # Idempotency check: active repair already queued/running for this object and target node?
+        active_job = db.get_active_repair_for_object(object_id, target_node_id=target_node_id)
+        if active_job:
+            print(f"[RepairManager] Active repair already exists for {object_id} on {target_node_id}: {active_job['job_id']}. Skipping.")
+            return
+
+        node_states = self.get_node_states()
+        all_reps = db.get_replicas_for_object(object_id)
+
+        # Select a healthy source replica (status == STORED and node status == HEALTHY and node != target_node_id)
+        healthy_sources = [
+            r for r in all_reps
+            if r["status"] == "STORED" and r["node_id"] != target_node_id and node_states.get(r["node_id"]) == "HEALTHY"
+        ]
+
+        if not healthy_sources:
+            print(f"[RepairManager] NO_HEALTHY_SOURCE for partition reconciliation of {object_id} on {target_node_id}")
+            err = "NO_HEALTHY_SOURCE: No healthy STORED replicas available to reconcile partition"
+            await manager.broadcast("REPAIR_FAILED", {
+                "object_id": object_id,
+                "target_node_id": target_node_id,
+                "error": err,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            await manager.broadcast("RECONCILIATION_FAILED", {
+                "object_id": object_id,
+                "target_node_id": target_node_id,
+                "error": err,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return
+
+        source_node = healthy_sources[0]["node_id"]
+        job_id = f"recon-{uuid.uuid4().hex[:8]}"
+        job_record = {
+            "job_id": job_id,
+            "object_id": object_id,
+            "source_node_id": source_node,
+            "target_node_id": target_node_id,
+            "reason": "PARTITION_RECONCILIATION",
+            "status": "QUEUED",
+            "bytes_transferred": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        db.create_repair_job(job_record)
+        await manager.broadcast("REPAIR_QUEUED", {
+            **job_record,
+            "object_name": obj["object_name"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        await manager.broadcast("RECONCILIATION_QUEUED", {
+            **job_record,
+            "object_name": obj["object_name"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        await self._queue.put(job_record)
+        print(f"[RepairManager] Enqueued partition reconciliation job {job_id} for {object_id}: {source_node} -> {target_node_id}")
+
     async def _worker_loop(self):
         """Continuously pulls and executes repair jobs up to concurrency limit."""
         while True:
@@ -218,6 +289,7 @@ class RepairManager:
         oid = job["object_id"]
         source_nid = job["source_node_id"]
         target_nid = job["target_node_id"]
+        is_recon = (job.get("reason") == "PARTITION_RECONCILIATION")
         now = datetime.now(timezone.utc).isoformat()
 
         # Update to RUNNING
@@ -232,6 +304,14 @@ class RepairManager:
             "target_node_id": target_nid,
             "timestamp": now,
         })
+        if is_recon:
+            await manager.broadcast("RECONCILIATION_STARTED", {
+                "job_id": job_id,
+                "object_id": oid,
+                "source_node_id": source_nid,
+                "target_node_id": target_nid,
+                "timestamp": now,
+            })
 
         obj = db.get_object(oid)
         if not obj:
@@ -322,6 +402,17 @@ class RepairManager:
                     "sha256": target_sha,
                     "timestamp": completed_time,
                 })
+                if is_recon:
+                    await manager.broadcast("RECONCILIATION_COMPLETED", {
+                        "job_id": job_id,
+                        "object_id": oid,
+                        "object_name": obj["object_name"],
+                        "source_node_id": source_nid,
+                        "target_node_id": target_nid,
+                        "bytes_transferred": len(payload),
+                        "sha256": target_sha,
+                        "timestamp": completed_time,
+                    })
 
                 print(f"[RepairManager] Successfully completed repair {job_id}: {source_nid} -> {target_nid} ({len(payload)} bytes)")
 
@@ -329,6 +420,15 @@ class RepairManager:
                 err = f"Repair exception: {str(e)}"
                 db.update_repair_job(job_id, {"status": "FAILED", "error": err, "completed_at": datetime.now(timezone.utc).isoformat()})
                 await manager.broadcast("REPAIR_FAILED", {"job_id": job_id, "error": err})
+                if is_recon:
+                    await manager.broadcast("RECONCILIATION_FAILED", {
+                        "job_id": job_id,
+                        "object_id": oid,
+                        "source_node_id": source_nid,
+                        "target_node_id": target_nid,
+                        "error": err,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
 
     def _get_node_url(self, node_id: str) -> Optional[str]:
         for n in settings.STORAGE_NODES:

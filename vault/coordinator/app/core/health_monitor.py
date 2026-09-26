@@ -47,6 +47,7 @@ class NodeHealthMonitor:
                 "error": None,
             }
 
+        self._partitioned_nodes: Set[str] = set()
         repair_mgr.set_node_health_getter(self.get_all_nodes)
 
     def start(self):
@@ -74,6 +75,86 @@ class NodeHealthMonitor:
     def get_healthy_node_ids(self) -> List[str]:
         return [nid for nid, n in self._nodes.items() if n["status"] == "HEALTHY"]
 
+    def is_node_partitioned(self, node_id: str) -> bool:
+        return node_id in self._partitioned_nodes or self._nodes.get(node_id, {}).get("status") == "PARTITIONED"
+
+    async def partition_node(self, node_id: str):
+        """Immediately marks node as partitioned and isolates its communication."""
+        self._partitioned_nodes.add(node_id)
+        node_rec = self._nodes.get(node_id)
+        now = datetime.now(timezone.utc).isoformat()
+        if node_rec:
+            prev_status = node_rec["status"]
+            node_rec["failed_heartbeats"] = DOWN_THRESHOLD
+            node_rec["error"] = f"Network partition: communication isolated with {node_id}"
+            node_rec["status"] = "PARTITIONED"
+
+            # Replicas on this node become PARTITIONED
+            db.update_replica_status_by_node(node_id, "STORED", "PARTITIONED")
+
+            await manager.broadcast("NETWORK_PARTITION_STARTED", {
+                "node_id": node_id,
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_PARTITIONED", {
+                "node_id": node_id,
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_STATE_CHANGED", {
+                "node_id": node_id,
+                "previous_status": prev_status,
+                "current_status": "PARTITIONED",
+                "timestamp": now,
+            })
+            print(f"[NodeHealthMonitor] Node {node_id} transitioned to PARTITIONED.")
+
+    async def restore_node_partition(self, node_id: str):
+        """Restores communication and initiates partition reconciliation."""
+        node_cfg = None
+        for n in settings.STORAGE_NODES:
+            if n["id"] == node_id:
+                node_cfg = n
+                break
+        if not node_cfg:
+            return
+
+        # 1. Instruct storage node to lift partition
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            try:
+                await client.post(f"{node_cfg['url']}/fault/restore")
+            except Exception as e:
+                print(f"[NodeHealthMonitor] Warning restoring node network: {e}")
+
+        # 2. Update state in coordinator
+        self._partitioned_nodes.discard(node_id)
+        node_rec = self._nodes.get(node_id)
+        now = datetime.now(timezone.utc).isoformat()
+        if node_rec:
+            prev_status = node_rec["status"]
+            node_rec["failed_heartbeats"] = 0
+            node_rec["error"] = None
+            node_rec["status"] = "RECOVERING"
+
+            await manager.broadcast("NETWORK_PARTITION_REMOVED", {
+                "node_id": node_id,
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_RECOVERING", {
+                "node_id": node_id,
+                "previous_status": prev_status,
+                "current_status": "RECOVERING",
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_STATE_CHANGED", {
+                "node_id": node_id,
+                "previous_status": prev_status,
+                "current_status": "RECOVERING",
+                "timestamp": now,
+            })
+
+        # 3. Trigger reconciliation
+        asyncio.create_task(self._reconcile_partitioned_node(node_cfg))
+
     async def _monitor_loop(self):
         # Initial brief sleep to let containers finish initialization
         await asyncio.sleep(1.0)
@@ -92,6 +173,7 @@ class NodeHealthMonitor:
         await asyncio.gather(*tasks, return_exceptions=True)
 
         healthy_count = sum(1 for n in self._nodes.values() if n["status"] == "HEALTHY")
+        partitioned_count = sum(1 for n in self._nodes.values() if n["status"] == "PARTITIONED")
         cluster_state = "HEALTHY" if healthy_count == len(self._nodes) else ("DEGRADED" if healthy_count > 0 else "CRITICAL")
 
         # Periodic cluster heartbeat event
@@ -100,6 +182,7 @@ class NodeHealthMonitor:
             "healthy_nodes": healthy_count,
             "suspect_nodes": sum(1 for n in self._nodes.values() if n["status"] == "SUSPECT"),
             "down_nodes": sum(1 for n in self._nodes.values() if n["status"] == "DOWN"),
+            "partitioned_nodes": partitioned_count,
             "recovering_nodes": sum(1 for n in self._nodes.values() if n["status"] == "RECOVERING"),
             "cluster_state": cluster_state,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -145,8 +228,8 @@ class NodeHealthMonitor:
             node_rec["objects_count"] = health_data.get("objects_count", 0)
             node_rec["error"] = None
 
+            # If node was recovering or suspect, transition back to HEALTHY
             if prev_status == "DOWN":
-                # Transition DOWN -> RECOVERING
                 node_rec["status"] = "RECOVERING"
                 await manager.broadcast("NODE_RECOVERING", {
                     "node_id": nid,
@@ -160,10 +243,22 @@ class NodeHealthMonitor:
                     "current_status": "RECOVERING",
                     "timestamp": now,
                 })
-
-                # Reconcile node manifest
                 asyncio.create_task(self._reconcile_recovering_node(node_cfg))
-
+            elif prev_status == "PARTITIONED":
+                # Node became reachable without explicit /restore API call
+                self._partitioned_nodes.discard(nid)
+                node_rec["status"] = "RECOVERING"
+                await manager.broadcast("NETWORK_PARTITION_REMOVED", {
+                    "node_id": nid,
+                    "timestamp": now,
+                })
+                await manager.broadcast("NODE_RECOVERING", {
+                    "node_id": nid,
+                    "previous_status": prev_status,
+                    "current_status": "RECOVERING",
+                    "timestamp": now,
+                })
+                asyncio.create_task(self._reconcile_partitioned_node(node_cfg))
             elif prev_status in ("SUSPECT", "RECOVERING"):
                 node_rec["status"] = "HEALTHY"
                 await manager.broadcast("NODE_STATE_CHANGED", {
@@ -181,44 +276,198 @@ class NodeHealthMonitor:
             node_rec["error"] = error_msg
             failed_count = node_rec["failed_heartbeats"]
 
-            if prev_status == "HEALTHY" and failed_count >= SUSPECT_THRESHOLD:
-                # Transition HEALTHY -> SUSPECT
-                node_rec["status"] = "SUSPECT"
-                await manager.broadcast("NODE_SUSPECT", {
+            if nid in self._partitioned_nodes:
+                # Node is partitioned
+                await manager.broadcast("PARTITION_REQUEST_FAILED", {
                     "node_id": nid,
-                    "failed_count": failed_count,
+                    "operation": "heartbeat",
                     "error": error_msg,
                     "timestamp": now,
                 })
-                await manager.broadcast("NODE_STATE_CHANGED", {
-                    "node_id": nid,
-                    "previous_status": prev_status,
-                    "current_status": "SUSPECT",
-                    "timestamp": now,
-                })
 
-            elif prev_status == "SUSPECT" and failed_count >= DOWN_THRESHOLD:
-                # Transition SUSPECT -> DOWN
-                node_rec["status"] = "DOWN"
-                await manager.broadcast("NODE_DOWN", {
-                    "node_id": nid,
-                    "failed_count": failed_count,
-                    "error": error_msg,
-                    "timestamp": now,
-                })
-                await manager.broadcast("NODE_STATE_CHANGED", {
-                    "node_id": nid,
-                    "previous_status": prev_status,
-                    "current_status": "DOWN",
-                    "timestamp": now,
-                })
+                if prev_status == "HEALTHY" and failed_count >= SUSPECT_THRESHOLD:
+                    node_rec["status"] = "SUSPECT"
+                    await manager.broadcast("NODE_SUSPECT", {
+                        "node_id": nid,
+                        "failed_count": failed_count,
+                        "error": error_msg,
+                        "timestamp": now,
+                    })
+                    await manager.broadcast("NODE_STATE_CHANGED", {
+                        "node_id": nid,
+                        "previous_status": prev_status,
+                        "current_status": "SUSPECT",
+                        "timestamp": now,
+                    })
+                elif prev_status in ("HEALTHY", "SUSPECT") and failed_count >= DOWN_THRESHOLD:
+                    node_rec["status"] = "PARTITIONED"
+                    db.update_replica_status_by_node(nid, "STORED", "PARTITIONED")
+                    await manager.broadcast("NODE_PARTITIONED", {
+                        "node_id": nid,
+                        "timestamp": now,
+                    })
+                    await manager.broadcast("NODE_STATE_CHANGED", {
+                        "node_id": nid,
+                        "previous_status": prev_status,
+                        "current_status": "PARTITIONED",
+                        "timestamp": now,
+                    })
+            else:
+                # Standard node failure (Phase 3)
+                if prev_status == "HEALTHY" and failed_count >= SUSPECT_THRESHOLD:
+                    node_rec["status"] = "SUSPECT"
+                    await manager.broadcast("NODE_SUSPECT", {
+                        "node_id": nid,
+                        "failed_count": failed_count,
+                        "error": error_msg,
+                        "timestamp": now,
+                    })
+                    await manager.broadcast("NODE_STATE_CHANGED", {
+                        "node_id": nid,
+                        "previous_status": prev_status,
+                        "current_status": "SUSPECT",
+                        "timestamp": now,
+                    })
 
-                # Mark replicas on this node as UNAVAILABLE
-                updated_count = db.update_replica_status_by_node(nid, "STORED", "UNAVAILABLE")
-                print(f"[NodeHealthMonitor] Node {nid} marked DOWN. {updated_count} replicas set to UNAVAILABLE.")
+                elif prev_status == "SUSPECT" and failed_count >= DOWN_THRESHOLD:
+                    node_rec["status"] = "DOWN"
+                    await manager.broadcast("NODE_DOWN", {
+                        "node_id": nid,
+                        "failed_count": failed_count,
+                        "error": error_msg,
+                        "timestamp": now,
+                    })
+                    await manager.broadcast("NODE_STATE_CHANGED", {
+                        "node_id": nid,
+                        "previous_status": prev_status,
+                        "current_status": "DOWN",
+                        "timestamp": now,
+                    })
 
-                # Trigger automatic repair
-                asyncio.create_task(repair_mgr.trigger_repairs_for_node(nid))
+                    # Mark replicas on this node as UNAVAILABLE
+                    updated_count = db.update_replica_status_by_node(nid, "STORED", "UNAVAILABLE")
+                    print(f"[NodeHealthMonitor] Node {nid} marked DOWN. {updated_count} replicas set to UNAVAILABLE.")
+
+                    # Trigger automatic repair
+                    asyncio.create_task(repair_mgr.trigger_repairs_for_node(nid))
+
+    async def _reconcile_partitioned_node(self, node_cfg: Dict[str, Any]):
+        """
+        Reconciles returning partitioned node's physical manifest with coordinator catalog.
+        - Deletes stale objects that were removed while partitioned (preventing resurrection).
+        - Prunes redundant 4th copies if RF=3 was already restored elsewhere (Rule 17).
+        - Reconciles missing replicas that were written while partitioned.
+        - Reconciles checksum mismatches.
+        - Verifies bytes and updates replica status to STORED.
+        - Transitions node RECOVERING -> HEALTHY.
+        """
+        nid = node_cfg["id"]
+        manifest_url = f"{node_cfg['url']}/manifest"
+        print(f"[NodeHealthMonitor] Starting partition reconciliation for node {nid}...")
+
+        enqueued_jobs = []
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.get(manifest_url)
+                if res.status_code == 200:
+                    manifest = res.json().get("items", [])
+                    manifest_map = {item["object_id"]: item for item in manifest}
+                    print(f"[NodeHealthMonitor] Node {nid} reported {len(manifest)} physical items.")
+
+                    # 1. Check existing manifest items
+                    for item in manifest:
+                        oid = item["object_id"]
+                        obj = db.get_object(oid)
+                        if not obj:
+                            # Stale object deleted while partitioned! Purge it to prevent resurrection.
+                            print(f"[NodeHealthMonitor] Purging stale object {oid} deleted while partitioned from node {nid}.")
+                            try:
+                                await client.delete(f"{node_cfg['url']}/delete/{oid}")
+                            except Exception as e:
+                                print(f"[NodeHealthMonitor] Failed deleting stale object {oid}: {e}")
+                            db.delete_replica(oid, nid)
+                            continue
+
+                        # Check if RF=3 is already satisfied by other healthy nodes
+                        all_reps = db.get_replicas_for_object(oid)
+                        other_healthy = [
+                            r for r in all_reps
+                            if r["node_id"] != nid and r["status"] == "STORED"
+                        ]
+                        if len(other_healthy) >= settings.REPLICATION_FACTOR:
+                            print(f"[NodeHealthMonitor] Object {oid} already has {len(other_healthy)} replicas. Pruning redundant replica on {nid}.")
+                            try:
+                                await client.delete(f"{node_cfg['url']}/delete/{oid}")
+                            except Exception:
+                                pass
+                            db.delete_replica(oid, nid)
+                            continue
+
+                        # Check if checksum matches
+                        if item["sha256"] == obj["sha256"] and item["size_bytes"] == obj["size_bytes"]:
+                            db.update_replica_status(oid, nid, "STORED", item["size_bytes"], item["sha256"])
+                            print(f"[NodeHealthMonitor] Verified valid replica {oid} on {nid} -> STORED.")
+                        else:
+                            print(f"[NodeHealthMonitor] Checksum mismatch for {oid} on {nid}. Reconciling.")
+                            await repair_mgr.trigger_partition_reconciliation(oid, nid)
+                            enqueued_jobs.append(oid)
+
+                    # 2. Check for missing replicas written while partitioned
+                    all_objects = db.list_objects()
+                    for obj in all_objects:
+                        oid = obj["object_id"]
+                        if oid in enqueued_jobs:
+                            continue
+                        all_reps = db.get_replicas_for_object(oid)
+                        rep_on_this_node = next((r for r in all_reps if r["node_id"] == nid), None)
+
+                        if rep_on_this_node and rep_on_this_node["status"] in ("PARTITIONED", "FAILED", "PENDING"):
+                            if oid not in manifest_map or manifest_map[oid]["sha256"] != obj["sha256"]:
+                                print(f"[NodeHealthMonitor] Object {oid} missing replica on {nid}. Reconciling.")
+                                await repair_mgr.trigger_partition_reconciliation(oid, nid)
+                                enqueued_jobs.append(oid)
+                            else:
+                                db.update_replica_status(oid, nid, "STORED", obj["size_bytes"], obj["sha256"])
+
+        except Exception as e:
+            print(f"[NodeHealthMonitor] Manifest query failed for {nid}: {e}")
+
+        # Wait for all reconciliation jobs for this node to finish
+        max_wait = 20.0
+        start_wait = time.time()
+        while time.time() - start_wait < max_wait:
+            active_jobs = [
+                oid for oid in enqueued_jobs
+                if db.get_active_repair_for_object(oid, target_node_id=nid)
+            ]
+            if not active_jobs:
+                break
+            await asyncio.sleep(0.5)
+
+        # Transition RECOVERING -> HEALTHY
+        node_rec = self._nodes.get(nid)
+        if node_rec:
+            prev_status = node_rec["status"]
+            node_rec["status"] = "HEALTHY"
+            node_rec["error"] = None
+            now = datetime.now(timezone.utc).isoformat()
+
+            await manager.broadcast("NODE_HEALTHY", {
+                "node_id": nid,
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_RECOVERED", {
+                "node_id": nid,
+                "timestamp": now,
+            })
+            await manager.broadcast("NODE_STATE_CHANGED", {
+                "node_id": nid,
+                "previous_status": prev_status,
+                "current_status": "HEALTHY",
+                "timestamp": now,
+            })
+            print(f"[NodeHealthMonitor] Node {nid} reconciliation completed. Node marked HEALTHY.")
 
     async def _reconcile_recovering_node(self, node_cfg: Dict[str, Any]):
         """

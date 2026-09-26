@@ -33,6 +33,11 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
   const [corruptActionLoading, setCorruptActionLoading] = useState(false);
   const [corruptActionFeedback, setCorruptActionFeedback] = useState(null);
 
+  // Network Partition state (Phase 5)
+  const [selectedPartitionNodeId, setSelectedPartitionNodeId] = useState('node-2');
+  const [partitionActionLoading, setPartitionActionLoading] = useState(false);
+  const [partitionActionFeedback, setPartitionActionFeedback] = useState(null);
+
   const getBaseUrl = useCallback(() => {
     return coordinatorBaseUrl || (window.location.port === '8000' ? '' : 'http://localhost:8000');
   }, [coordinatorBaseUrl]);
@@ -156,6 +161,44 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
       });
     } finally {
       setCorruptActionLoading(false);
+    }
+  };
+
+  const selectedPartitionNode = nodes.find((n) => n.node_id === selectedPartitionNodeId) || {
+    node_id: selectedPartitionNodeId,
+    status: 'UNKNOWN',
+  };
+
+  const isPartitioned = (selectedPartitionNode.status || '').toUpperCase() === 'PARTITIONED';
+
+  // Network Partition Actions (Phase 5)
+  const handlePartitionAction = async (action) => {
+    try {
+      setPartitionActionLoading(true);
+      setPartitionActionFeedback(null);
+      const endpoint = `${getBaseUrl()}/faults/node/${selectedPartitionNodeId}/${action}`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || `Action ${action} failed`);
+      }
+
+      setPartitionActionFeedback({
+        type: action === 'partition' ? 'warning' : 'success',
+        message: data.message || `Node ${selectedPartitionNodeId.toUpperCase()} network ${action === 'partition' ? 'isolated' : 'restored'}.`,
+        data,
+      });
+
+      await fetchData();
+      if (onRefreshCluster) onRefreshCluster();
+    } catch (err) {
+      setPartitionActionFeedback({
+        type: 'error',
+        message: err.message,
+      });
+    } finally {
+      setPartitionActionLoading(false);
     }
   };
 
@@ -452,25 +495,43 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
         </div>
       </div>
 
-      {/* Network Partition Panel (Phase 5 - Clearly Locked) */}
+      {/* Network Partition Panel (Phase 5 - Live Control Panel) */}
       <div
         className="panel"
         style={{
           padding: '24px 28px',
-          background: '#F8FAFC',
-          border: '1px dashed #CBD5E1',
-          position: 'relative',
+          background: '#FFFFFF',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-sm)',
+          borderLeft: isPartitioned ? '4px solid #EA580C' : '4px solid #F59E0B',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '18px',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {/* Panel Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Network size={20} color="#94A3B8" />
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: 'var(--radius-sm)',
+                background: isPartitioned ? '#FFF7ED' : '#FFFBEB',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: isPartitioned ? '#EA580C' : '#D97706',
+              }}
+            >
+              <Network size={20} />
+            </div>
             <div>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#64748B' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#172033' }}>
                 Network Partition & Split-Brain Simulator
               </h3>
-              <p style={{ fontSize: '0.78rem', color: '#94A3B8', marginTop: '2px' }}>
-                Simulate network isolation into majority and minority quorums.
+              <p style={{ fontSize: '0.80rem', color: '#64748B', marginTop: '2px' }}>
+                Simulate network isolation. The node process stays running and retains local disk, but coordinator communication fails.
               </p>
             </div>
           </div>
@@ -481,19 +542,164 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
               alignItems: 'center',
               gap: '6px',
               padding: '6px 12px',
-              background: '#EFF6FF',
+              background: isPartitioned ? '#FFF7ED' : '#ECFDF5',
               borderRadius: 'var(--radius-sm)',
-              border: '1px solid #DBEAFE',
+              border: `1px solid ${isPartitioned ? '#FED7AA' : '#A7F3D0'}`,
               fontSize: '0.75rem',
               fontWeight: 700,
-              color: '#2563EB',
+              color: isPartitioned ? '#EA580C' : '#10B981',
               fontFamily: 'var(--font-mono)',
             }}
           >
-            <Lock size={13} />
-            <span>PHASE 5 — NOT AVAILABLE</span>
+            {isPartitioned ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+            <span>PHASE 5 — {isPartitioned ? 'PARTITION ACTIVE' : 'SYSTEM HEALTHY'}</span>
           </div>
         </div>
+
+        {/* Clear Warning Banner */}
+        <div
+          style={{
+            padding: '12px 16px',
+            background: isPartitioned ? '#FEF2F2' : '#FFFBEB',
+            borderRadius: 'var(--radius-sm)',
+            border: `1px solid ${isPartitioned ? '#FECACA' : '#FDE68A'}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '0.80rem',
+            color: isPartitioned ? '#991B1B' : '#92400E',
+          }}
+        >
+          <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+          <span>
+            <strong>WARNING:</strong> Network partitioning intentionally isolates all communication to the target node.
+            The storage node stays alive on disk, but coordinator requests fail with bounded timeout.
+            Quorum writes (W=2) and reads continue through remaining healthy replicas.
+          </span>
+        </div>
+
+        {/* Target Node Selection & Status */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: '16px',
+            padding: '16px',
+            background: '#F8FAFC',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid #E2E8F0',
+          }}
+        >
+          <div>
+            <label style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
+              TARGET STORAGE NODE
+            </label>
+            <select
+              value={selectedPartitionNodeId}
+              onChange={(e) => setSelectedPartitionNodeId(e.target.value)}
+              className="form-input"
+              style={{ padding: '8px 12px', fontSize: '0.84rem', fontWeight: 600 }}
+            >
+              {nodes.map((n) => (
+                <option key={n.node_id} value={n.node_id}>
+                  {n.node_id.toUpperCase()} ({n.status})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
+              CURRENT STATE
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', height: '38px' }}>
+              <span
+                style={{
+                  fontSize: '0.80rem',
+                  fontFamily: 'var(--font-mono)',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontWeight: 800,
+                  background: isPartitioned ? '#FFF7ED' : selectedPartitionNode.status === 'HEALTHY' ? '#ECFDF5' : '#EFF6FF',
+                  color: isPartitioned ? '#EA580C' : selectedPartitionNode.status === 'HEALTHY' ? '#10B981' : '#2563EB',
+                  border: `1px solid ${isPartitioned ? '#FED7AA' : selectedPartitionNode.status === 'HEALTHY' ? '#A7F3D0' : '#BFDBFE'}`,
+                }}
+              >
+                ● {(selectedPartitionNode.status || 'UNKNOWN').toUpperCase()}
+              </span>
+              {isPartitioned && (
+                <span style={{ fontSize: '0.74rem', color: '#EA580C', fontWeight: 700 }}>
+                  NODE ALIVE · NETWORK UNREACHABLE
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {isPartitioned ? (
+            <button
+              onClick={() => handlePartitionAction('restore')}
+              disabled={partitionActionLoading}
+              className="btn btn-primary"
+              style={{
+                padding: '10px 20px',
+                fontSize: '0.86rem',
+                background: '#7C3AED',
+                borderColor: '#6D28D9',
+              }}
+            >
+              <RotateCcw size={15} className={partitionActionLoading ? 'spin' : ''} />
+              <span>{partitionActionLoading ? 'Restoring Network...' : 'RESTORE NETWORK'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => handlePartitionAction('partition')}
+              disabled={partitionActionLoading}
+              className="btn"
+              style={{
+                padding: '10px 20px',
+                fontSize: '0.86rem',
+                background: '#EA580C',
+                color: '#FFFFFF',
+                border: '1px solid #C2410C',
+                fontWeight: 700,
+              }}
+            >
+              <AlertTriangle size={15} />
+              <span>{partitionActionLoading ? 'Partitioning...' : 'PARTITION NODE'}</span>
+            </button>
+          )}
+
+          <div style={{ fontSize: '0.74rem', color: '#94A3B8' }}>
+            {isPartitioned
+              ? 'Clicking Restore Network returns communication and triggers autonomous reconciliation.'
+              : 'Clicking Partition Node simulates communication failure while the node process remains alive.'}
+          </div>
+        </div>
+
+        {/* Feedback Message */}
+        {partitionActionFeedback && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{
+              padding: '12px 16px',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.80rem',
+              background: partitionActionFeedback.type === 'error' ? '#FEF2F2' : '#EFF6FF',
+              color: partitionActionFeedback.type === 'error' ? '#DC2626' : '#1D4ED8',
+              border: `1px solid ${partitionActionFeedback.type === 'error' ? '#FECACA' : '#BFDBFE'}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            {partitionActionFeedback.type === 'error' ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+            <span>{partitionActionFeedback.message}</span>
+          </motion.div>
+        )}
       </div>
     </div>
   );

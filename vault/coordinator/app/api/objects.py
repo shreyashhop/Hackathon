@@ -4,7 +4,7 @@ import hashlib
 import asyncio
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Response, status
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Response, status
 import httpx
 
 from ..core.config import settings
@@ -17,7 +17,10 @@ router = APIRouter(prefix="/objects", tags=["Object Storage"])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def upload_object(file: UploadFile = File(...)):
+async def upload_object(
+    file: UploadFile = File(...),
+    object_id: Optional[str] = Form(None)
+):
     """
     Phase 2 Real Distributed Replication with Quorum (W=2, RF=3):
     1. Read and calculate SHA-256 of uploaded bytes.
@@ -53,16 +56,21 @@ async def upload_object(file: UploadFile = File(...)):
 
     size_bytes = len(content)
     sha256_hash = hashlib.sha256(content).hexdigest()
-    object_id = str(uuid.uuid4())
+    if not object_id:
+        object_id = str(uuid.uuid4())
     content_type = file.content_type or "application/octet-stream"
 
     rf = settings.REPLICATION_FACTOR
     w_quorum = settings.WRITE_QUORUM
 
+    from ..core.health_monitor import health_monitor
+
     # 1. Check node health and identify eligible nodes
     try:
         nodes = await check_all_nodes()
-        eligible_nodes = [n for n in nodes if str(n.get("status", "")).lower() == "healthy"]
+        # Candidate nodes for HRW placement include healthy and partitioned nodes (excluding DOWN nodes)
+        candidate_nodes = [n for n in nodes if str(n.get("status", "")).lower() != "down"]
+        healthy_nodes = [n for n in nodes if str(n.get("status", "")).lower() == "healthy"]
     except Exception as e:
         await manager.broadcast("OBJECT_OPERATION_FAILED", {
             "operation": "upload",
@@ -74,15 +82,15 @@ async def upload_object(file: UploadFile = File(...)):
             detail=f"Failed to query cluster storage nodes: {str(e)}"
         )
 
-    # Validate quorum feasibility
-    if len(eligible_nodes) < w_quorum:
+    # Validate quorum feasibility: at least w_quorum reachable healthy nodes required
+    if len(healthy_nodes) < w_quorum:
         err_msg = (
-            f"Insufficient healthy nodes: only {len(eligible_nodes)} healthy, "
+            f"Insufficient healthy nodes: only {len(healthy_nodes)} healthy, "
             f"minimum write quorum W={w_quorum} required"
         )
         await manager.broadcast("WRITE_QUORUM_FAILED", {
             "object_id": object_id,
-            "healthy_nodes": len(eligible_nodes),
+            "healthy_nodes": len(healthy_nodes),
             "write_quorum": w_quorum,
             "error": err_msg,
         })
@@ -92,7 +100,7 @@ async def upload_object(file: UploadFile = File(...)):
         )
 
     # 2. Select replica nodes using deterministic Rendezvous Hashing (HRW)
-    selected_nodes = select_replica_nodes(object_id, eligible_nodes, rf)
+    selected_nodes = select_replica_nodes(object_id, candidate_nodes, rf)
     selected_node_ids = [n["node_id"] for n in selected_nodes]
 
     # Emit starting events
@@ -139,6 +147,7 @@ async def upload_object(file: UploadFile = File(...)):
     async def write_to_replica(node: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
         nid = node["node_id"]
         url = node["url"]
+        is_node_part = health_monitor.is_node_partitioned(nid)
         await manager.broadcast("REPLICA_WRITE_STARTED", {
             "object_id": object_id,
             "node_id": nid,
@@ -146,17 +155,26 @@ async def upload_object(file: UploadFile = File(...)):
         })
 
         try:
-            resp = await client.put(f"{url}/store/{object_id}", content=content)
+            resp = await client.put(f"{url}/store/{object_id}", content=content, timeout=2.5)
             if resp.status_code != 200:
                 err = f"HTTP {resp.status_code}: {resp.text}"
-                db.update_replica_status(object_id, nid, "FAILED")
+                target_status = "PARTITIONED" if is_node_part or resp.status_code == 504 else "FAILED"
+                db.update_replica_status(object_id, nid, target_status)
+                if target_status == "PARTITIONED":
+                    await manager.broadcast("PARTITION_REQUEST_FAILED", {
+                        "object_id": object_id,
+                        "node_id": nid,
+                        "operation": "write",
+                        "error": err,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 await manager.broadcast("REPLICA_WRITE_FAILED", {
                     "object_id": object_id,
                     "node_id": nid,
                     "error": err,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-                return {"node_id": nid, "success": False, "error": err}
+                return {"node_id": nid, "success": False, "error": err, "is_partitioned": (target_status == "PARTITIONED")}
 
             node_data = resp.json()
             returned_sha = node_data.get("sha256")
@@ -166,9 +184,8 @@ async def upload_object(file: UploadFile = File(...)):
             if returned_sha != sha256_hash or returned_size != size_bytes:
                 err = f"Checksum or size mismatch from {nid} (got sha={returned_sha}, size={returned_size})"
                 db.update_replica_status(object_id, nid, "FAILED")
-                # Attempt to remove bad replica on node
                 try:
-                    await client.delete(f"{url}/delete/{object_id}")
+                    await client.delete(f"{url}/delete/{object_id}", timeout=2.5)
                 except Exception:
                     pass
                 await manager.broadcast("REPLICA_WRITE_FAILED", {
@@ -177,7 +194,7 @@ async def upload_object(file: UploadFile = File(...)):
                     "error": err,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-                return {"node_id": nid, "success": False, "error": err}
+                return {"node_id": nid, "success": False, "error": err, "is_partitioned": False}
 
             # Mark replica as STORED
             db.update_replica_status(object_id, nid, "STORED", size_bytes, sha256_hash)
@@ -188,18 +205,27 @@ async def upload_object(file: UploadFile = File(...)):
                 "sha256": sha256_hash,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
-            return {"node_id": nid, "success": True, "size_bytes": size_bytes, "sha256": sha256_hash}
+            return {"node_id": nid, "success": True, "size_bytes": size_bytes, "sha256": sha256_hash, "is_partitioned": False}
 
         except Exception as exc:
             err = str(exc)
-            db.update_replica_status(object_id, nid, "FAILED")
+            target_status = "PARTITIONED" if is_node_part or "timed out" in err.lower() or "504" in err else "FAILED"
+            db.update_replica_status(object_id, nid, target_status)
+            if target_status == "PARTITIONED":
+                await manager.broadcast("PARTITION_REQUEST_FAILED", {
+                    "object_id": object_id,
+                    "node_id": nid,
+                    "operation": "write",
+                    "error": err,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
             await manager.broadcast("REPLICA_WRITE_FAILED", {
                 "object_id": object_id,
                 "node_id": nid,
                 "error": err,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
-            return {"node_id": nid, "success": False, "error": err}
+            return {"node_id": nid, "success": False, "error": err, "is_partitioned": (target_status == "PARTITIONED")}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         write_tasks = [write_to_replica(node, client) for node in selected_nodes]
@@ -220,6 +246,18 @@ async def upload_object(file: UploadFile = File(...)):
             "successful_nodes": successful_replicas,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+
+        # Check if any partitioned node missed the write
+        partitioned_failed = [r["node_id"] for r in replica_results if r.get("is_partitioned")]
+        if partitioned_failed:
+            await manager.broadcast("PARTITIONED_WRITE", {
+                "object_id": object_id,
+                "partitioned_node_id": partitioned_failed[0],
+                "partitioned_nodes": partitioned_failed,
+                "successful_replicas": success_count,
+                "write_quorum": w_quorum,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
         final_status = "stored" if success_count == target_count else "degraded"
         db.update_object_status(object_id, final_status)
@@ -345,6 +383,13 @@ async def download_object(object_id: str):
     healthy_node_ids = set(health_monitor.get_healthy_node_ids())
     stored_replicas.sort(key=lambda r: 0 if r["node_id"] in healthy_node_ids else 1)
 
+    # Check for any replica on a partitioned node
+    all_obj_reps = db.get_replicas_for_object(object_id)
+    partitioned_reps = [
+        r for r in all_obj_reps
+        if r.get("status") == "PARTITIONED" or health_monitor.is_node_partitioned(r["node_id"])
+    ]
+
     node_dict = {n["id"]: n for n in settings.STORAGE_NODES}
     download_errors = []
 
@@ -356,7 +401,7 @@ async def download_object(object_id: str):
                 continue
 
             try:
-                resp = await client.get(f"{node_cfg['url']}/retrieve/{object_id}")
+                resp = await client.get(f"{node_cfg['url']}/retrieve/{object_id}", timeout=2.5)
                 if resp.status_code == 404:
                     err = f"Physical file missing on {nid}"
                     db.update_replica_status(object_id, nid, "FAILED")
@@ -371,6 +416,14 @@ async def download_object(object_id: str):
 
                 if resp.status_code != 200:
                     err = f"Storage node {nid} returned HTTP {resp.status_code}"
+                    if health_monitor.is_node_partitioned(nid) or resp.status_code == 504:
+                        await manager.broadcast("PARTITION_REQUEST_FAILED", {
+                            "object_id": object_id,
+                            "node_id": nid,
+                            "operation": "read",
+                            "error": err,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
                     download_errors.append(err)
                     continue
 
@@ -414,6 +467,14 @@ async def download_object(object_id: str):
                     continue
 
                 # Valid replica read succeeded!
+                if partitioned_reps and nid not in [p["node_id"] for p in partitioned_reps]:
+                    await manager.broadcast("PARTITIONED_READ_FAILOVER", {
+                        "object_id": object_id,
+                        "partitioned_node_id": partitioned_reps[0]["node_id"],
+                        "served_by_node_id": nid,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+
                 await manager.broadcast("REPLICA_READ", {
                     "object_id": object_id,
                     "node_id": nid,
@@ -440,14 +501,16 @@ async def download_object(object_id: str):
                     }
                 )
 
-            except httpx.RequestError as exc:
-                err = f"Connection error to {nid}: {str(exc)}"
-                await manager.broadcast("REPLICA_READ_FAILED", {
-                    "object_id": object_id,
-                    "node_id": nid,
-                    "error": err,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+            except Exception as exc:
+                err = str(exc)
+                if health_monitor.is_node_partitioned(nid) or "timed out" in err.lower() or "504" in err:
+                    await manager.broadcast("PARTITION_REQUEST_FAILED", {
+                        "object_id": object_id,
+                        "node_id": nid,
+                        "operation": "read",
+                        "error": err,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 download_errors.append(err)
                 continue
 
@@ -491,7 +554,7 @@ async def delete_object(object_id: str):
     async def delete_from_node(node: Dict[str, Any], client: httpx.AsyncClient):
         nid = node["id"]
         try:
-            await client.delete(f"{node['url']}/delete/{object_id}")
+            await client.delete(f"{node['url']}/delete/{object_id}", timeout=2.5)
             await manager.broadcast("REPLICA_DELETE", {
                 "object_id": object_id,
                 "node_id": nid,
@@ -499,6 +562,15 @@ async def delete_object(object_id: str):
             })
         except Exception as exc:
             print(f"[Coordinator] Warning: Could not delete replica from {nid}: {exc}")
+            from ..core.health_monitor import health_monitor
+            if health_monitor.is_node_partitioned(nid):
+                await manager.broadcast("PARTITION_REQUEST_FAILED", {
+                    "object_id": object_id,
+                    "node_id": nid,
+                    "operation": "delete",
+                    "error": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
 
     if target_nodes:
         async with httpx.AsyncClient(timeout=10.0) as client:

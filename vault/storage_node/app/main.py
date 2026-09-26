@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException, status
@@ -47,6 +48,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def network_partition_middleware(request: Request, call_next):
+    # Allow partition control endpoints and fault inspection so state can be restored/queried
+    if request.url.path in ("/fault/partition", "/fault/unpartition", "/fault/restore", "/fault"):
+        return await call_next(request)
+
+    if fault_mgr.is_partitioned:
+        # A network-partitioned node drops/delays external communication
+        # Delaying past coordinator's timeout (1-2s) causes real TimeoutException
+        await asyncio.sleep(4.0)
+        return Response(content=f"Network partition: host {NODE_ID} unreachable", status_code=status.HTTP_504_GATEWAY_TIMEOUT)
+
+    return await call_next(request)
 
 
 @app.get("/")
@@ -220,6 +236,21 @@ async def fault_corrupt(object_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.post("/fault/partition")
+async def fault_partition():
+    """Simulates network partition / communication isolation."""
+    fault_mgr.partition()
+    return {"node_id": NODE_ID, "status": "partitioned", "is_partitioned": True}
+
+
+@app.post("/fault/restore")
+@app.post("/fault/unpartition")
+async def fault_restore():
+    """Restores network communication from partition."""
+    fault_mgr.unpartition()
+    return {"node_id": NODE_ID, "status": "restored", "is_partitioned": False}
 
 
 @app.get("/fault")

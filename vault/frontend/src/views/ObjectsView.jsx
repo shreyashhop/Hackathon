@@ -40,6 +40,17 @@ async function computeSha256(file) {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+function getReplicaStatusStyle(status) {
+  const s = (status || '').toUpperCase();
+  if (s === 'STORED') return { color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0' };
+  if (s === 'PARTITIONED') return { color: '#EA580C', bg: '#FFF7ED', border: '#FED7AA' };
+  if (s === 'RECOVERING') return { color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' };
+  if (s === 'CORRUPT') return { color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' };
+  if (s === 'DOWN') return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA' };
+  if (s === 'STALE' || s === 'MISSING') return { color: '#D97706', bg: '#FFFBEB', border: '#FDE68A' };
+  return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE' };
+}
+
 export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes }) {
   const [objects, setObjects] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -591,23 +602,26 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
                   {/* Replicas status */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>REPLICAS:</span>
-                    {replicas.map((r, rIdx) => (
-                      <span
-                        key={rIdx}
-                        style={{
-                          fontSize: '0.72rem',
-                          fontFamily: 'var(--font-mono)',
-                          padding: '2px 8px',
-                          borderRadius: '4px',
-                          background: r.status === 'STORED' ? '#ECFDF5' : '#FEF2F2',
-                          color: r.status === 'STORED' ? '#10B981' : '#EF4444',
-                          border: `1px solid ${r.status === 'STORED' ? '#A7F3D0' : '#FECACA'}`,
-                          fontWeight: 700,
-                        }}
-                      >
-                        ● {r.node_id.toUpperCase()}
-                      </span>
-                    ))}
+                    {replicas.map((r, rIdx) => {
+                      const rStyle = getReplicaStatusStyle(r.status);
+                      return (
+                        <span
+                          key={rIdx}
+                          style={{
+                            fontSize: '0.72rem',
+                            fontFamily: 'var(--font-mono)',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            background: rStyle.bg,
+                            color: rStyle.color,
+                            border: `1px solid ${rStyle.border}`,
+                            fontWeight: 700,
+                          }}
+                        >
+                          ● {r.node_id.toUpperCase()} ({r.status})
+                        </span>
+                      );
+                    })}
 
                     <span className={`status-pill ${isAllHealthy ? 'healthy' : 'warning'}`}>
                       {healthyReplicas}/{totalReplicas} HEALTHY
@@ -652,7 +666,18 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
                                 {rep.node_id.toUpperCase()}
                               </span>
                             </div>
-                            <span className={`status-pill ${rep.status === 'STORED' ? 'healthy' : 'failure'}`}>
+                            <span
+                              style={{
+                                fontSize: '0.72rem',
+                                fontFamily: 'var(--font-mono)',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                background: getReplicaStatusStyle(rep.status).bg,
+                                color: getReplicaStatusStyle(rep.status).color,
+                                border: `1px solid ${getReplicaStatusStyle(rep.status).border}`,
+                                fontWeight: 700,
+                              }}
+                            >
                               {rep.status}
                             </span>
                           </div>

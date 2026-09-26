@@ -33,6 +33,20 @@ function getJobStatusBadge(status) {
   return { className: 'warning', label: s || 'UNKNOWN', color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A' };
 }
 
+function getReasonBadge(reason) {
+  const r = (reason || '').toUpperCase();
+  if (r.includes('PARTITION')) {
+    return { label: 'PARTITION_RECONCILIATION', color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' };
+  }
+  if (r.includes('CORRUPT')) {
+    return { label: 'CORRUPTION_REPAIR', color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' };
+  }
+  if (r.includes('NODE_DOWN')) {
+    return { label: 'NODE_DOWN_REPAIR', color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A' };
+  }
+  return { label: r || 'REPAIR', color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE' };
+}
+
 export default function RepairView({ coordinatorBaseUrl = '' }) {
   const [jobs, setJobs] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -209,6 +223,7 @@ export default function RepairView({ coordinatorBaseUrl = '' }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {jobs.map((job) => {
               const badge = getJobStatusBadge(job.status);
+              const reasonBadge = getReasonBadge(job.reason);
               const isCompleted = job.status === 'COMPLETED';
               const isRunning = job.status === 'RUNNING';
 
@@ -235,6 +250,20 @@ export default function RepairView({ coordinatorBaseUrl = '' }) {
                       <span className={`status-pill ${badge.className}`}>
                         {badge.label}
                       </span>
+                      <span
+                        style={{
+                          fontSize: '0.72rem',
+                          fontFamily: 'var(--font-mono)',
+                          padding: '3px 8px',
+                          borderRadius: '4px',
+                          background: reasonBadge.bg,
+                          color: reasonBadge.color,
+                          border: `1px solid ${reasonBadge.border}`,
+                          fontWeight: 800,
+                        }}
+                      >
+                        REASON: {reasonBadge.label}
+                      </span>
                       <span style={{ fontSize: '0.74rem', color: '#64748B' }}>
                         Object: <strong>{job.object_id}</strong>
                       </span>
@@ -257,14 +286,14 @@ export default function RepairView({ coordinatorBaseUrl = '' }) {
                       border: '1px solid #E2E8F0',
                     }}
                   >
-                    {/* Stage 1: Detection */}
+                    {/* Stage 1: Trigger / Reason */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       <span style={{ fontSize: '0.65rem', color: '#94A3B8', fontWeight: 700 }}>STAGE 1</span>
-                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#EF4444' }}>
-                        {job.reason || 'CORRUPTION'} DETECTED
+                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: reasonBadge.color }}>
+                        {reasonBadge.label}
                       </span>
                       <span style={{ fontSize: '0.68rem', color: '#64748B', fontFamily: 'var(--font-mono)' }}>
-                        Target: {job.target_node_id}
+                        Target: {job.target_node_id?.toUpperCase()}
                       </span>
                     </div>
 
@@ -275,7 +304,7 @@ export default function RepairView({ coordinatorBaseUrl = '' }) {
                         SOURCE SELECTED
                       </span>
                       <span style={{ fontSize: '0.68rem', color: '#64748B', fontFamily: 'var(--font-mono)' }}>
-                        Donor: {job.source_node_id || 'Autoselected'}
+                        Donor: {job.source_node_id ? job.source_node_id.toUpperCase() : 'Autoselected'}
                       </span>
                     </div>
 
@@ -294,10 +323,10 @@ export default function RepairView({ coordinatorBaseUrl = '' }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       <span style={{ fontSize: '0.65rem', color: '#94A3B8', fontWeight: 700 }}>STAGE 4</span>
                       <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#06B6D4' }}>
-                        SHA-256 VERIFY
+                        SHA-256 VERIFIED
                       </span>
                       <span style={{ fontSize: '0.68rem', color: '#64748B', fontFamily: 'var(--font-mono)' }}>
-                        Physical on-disk digest
+                        {job.bytes_transferred || 0} BYTES
                       </span>
                     </div>
 

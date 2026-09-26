@@ -26,8 +26,8 @@ function getStatusBadge(status) {
   if (s === 'healthy') return { className: 'healthy', label: 'HEALTHY', color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0' };
   if (s === 'suspect' || s === 'warning' || s === 'degraded') return { className: 'warning', label: s.toUpperCase(), color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A' };
   if (s === 'down' || s === 'offline' || s === 'critical') return { className: 'failure', label: s.toUpperCase(), color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' };
-  if (s === 'partitioned') return { className: 'partitioned', label: 'PARTITIONED', color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' };
-  if (s === 'recovering') return { className: 'recovering', label: 'RECOVERING', color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE' };
+  if (s === 'partitioned') return { className: 'warning', label: 'PARTITIONED', color: '#EA580C', bg: '#FFF7ED', border: '#FED7AA' };
+  if (s === 'recovering') return { className: 'recovering', label: 'RECOVERING', color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' };
   return { className: 'warning', label: (status || 'UNKNOWN').toUpperCase(), color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A' };
 }
 
@@ -307,43 +307,92 @@ export default function DashboardView({
               <path id="path-node3-node4" d="M 620 155 L 400 245" />
             </defs>
 
-            {/* Static Background Connection Mesh */}
-            <g stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4">
-              <use href="#path-coord-node1" />
-              <use href="#path-coord-node2" />
-              <use href="#path-coord-node3" />
-              <use href="#path-node1-node5" />
-              <use href="#path-node2-node4" />
-              <use href="#path-node4-node5" />
-              <use href="#path-node3-node5" />
-              <use href="#path-node1-node4" />
-              <use href="#path-node3-node4" />
+            {/* Static Background Connection Mesh & Dynamic Broken Links */}
+            <g>
+              {/* Coordinator to Node-1 */}
+              <use
+                href="#path-coord-node1"
+                stroke={getNodeData('node-1').status?.toLowerCase() === 'partitioned' ? '#EA580C' : '#CBD5E1'}
+                strokeWidth={getNodeData('node-1').status?.toLowerCase() === 'partitioned' ? '2.5' : '1.5'}
+                strokeDasharray={getNodeData('node-1').status?.toLowerCase() === 'partitioned' ? '3 3' : '4 4'}
+              />
+              {/* Coordinator to Node-2 */}
+              <use
+                href="#path-coord-node2"
+                stroke={getNodeData('node-2').status?.toLowerCase() === 'partitioned' ? '#EA580C' : '#CBD5E1'}
+                strokeWidth={getNodeData('node-2').status?.toLowerCase() === 'partitioned' ? '2.5' : '1.5'}
+                strokeDasharray={getNodeData('node-2').status?.toLowerCase() === 'partitioned' ? '3 3' : '4 4'}
+              />
+              {/* Coordinator to Node-3 */}
+              <use
+                href="#path-coord-node3"
+                stroke={getNodeData('node-3').status?.toLowerCase() === 'partitioned' ? '#EA580C' : '#CBD5E1'}
+                strokeWidth={getNodeData('node-3').status?.toLowerCase() === 'partitioned' ? '2.5' : '1.5'}
+                strokeDasharray={getNodeData('node-3').status?.toLowerCase() === 'partitioned' ? '3 3' : '4 4'}
+              />
+              {/* Peer mesh */}
+              <use href="#path-node1-node5" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
+              <use href="#path-node2-node4" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
+              <use href="#path-node4-node5" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
+              <use href="#path-node3-node5" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
+              <use href="#path-node1-node4" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
+              <use href="#path-node3-node4" stroke="#CBD5E1" strokeWidth="1.5" strokeDasharray="4 4" />
             </g>
 
-            {/* Animated Traffic Particles along Active Connections */}
+            {/* Partition Disconnect Markers on Coordinator Links */}
+            {['node-1', 'node-2', 'node-3'].map((nid) => {
+              if (getNodeData(nid).status?.toLowerCase() !== 'partitioned') return null;
+              const coords = {
+                'node-1': { x: 290, y: 110 },
+                'node-2': { x: 400, y: 110 },
+                'node-3': { x: 510, y: 110 },
+              }[nid];
+              return (
+                <g key={`cut-${nid}`} transform={`translate(${coords.x}, ${coords.y})`}>
+                  <circle r="9" fill="#FFF7ED" stroke="#EA580C" strokeWidth="2" />
+                  <line x1="-5" y1="-5" x2="5" y2="5" stroke="#EA580C" strokeWidth="2.5" />
+                </g>
+              );
+            })}
+
+            {/* Animated Traffic Particles along Active Connections (Only when node is reachable) */}
             {coordinatorData && (
               <g fill="#2563EB">
-                <circle r="3.5" fill="#2563EB" opacity="0.85">
-                  <animateMotion dur="3s" repeatCount="indefinite" href="#path-coord-node1" />
-                </circle>
-                <circle r="3.5" fill="#06B6D4" opacity="0.85">
-                  <animateMotion dur="2.4s" repeatCount="indefinite" href="#path-coord-node2" />
-                </circle>
-                <circle r="3.5" fill="#7C3AED" opacity="0.85">
-                  <animateMotion dur="3.2s" repeatCount="indefinite" href="#path-coord-node3" />
-                </circle>
-                <circle r="3" fill="#10B981" opacity="0.8">
-                  <animateMotion dur="3.5s" repeatCount="indefinite" href="#path-node2-node4" />
-                </circle>
-                <circle r="3" fill="#10B981" opacity="0.8">
-                  <animateMotion dur="3.8s" repeatCount="indefinite" href="#path-node4-node5" />
-                </circle>
-                <circle r="3" fill="#2563EB" opacity="0.8">
-                  <animateMotion dur="4.2s" repeatCount="indefinite" href="#path-node1-node5" />
-                </circle>
-                <circle r="3" fill="#7C3AED" opacity="0.8">
-                  <animateMotion dur="4s" repeatCount="indefinite" href="#path-node3-node5" />
-                </circle>
+                {getNodeData('node-1').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3.5" fill="#2563EB" opacity="0.85">
+                    <animateMotion dur="3s" repeatCount="indefinite" href="#path-coord-node1" />
+                  </circle>
+                )}
+                {getNodeData('node-2').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3.5" fill="#06B6D4" opacity="0.85">
+                    <animateMotion dur="2.4s" repeatCount="indefinite" href="#path-coord-node2" />
+                  </circle>
+                )}
+                {getNodeData('node-3').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3.5" fill="#7C3AED" opacity="0.85">
+                    <animateMotion dur="3.2s" repeatCount="indefinite" href="#path-coord-node3" />
+                  </circle>
+                )}
+                {getNodeData('node-2').status?.toLowerCase() === 'healthy' && getNodeData('node-4').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3" fill="#10B981" opacity="0.8">
+                    <animateMotion dur="3.5s" repeatCount="indefinite" href="#path-node2-node4" />
+                  </circle>
+                )}
+                {getNodeData('node-4').status?.toLowerCase() === 'healthy' && getNodeData('node-5').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3" fill="#10B981" opacity="0.8">
+                    <animateMotion dur="3.8s" repeatCount="indefinite" href="#path-node4-node5" />
+                  </circle>
+                )}
+                {getNodeData('node-1').status?.toLowerCase() === 'healthy' && getNodeData('node-5').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3" fill="#2563EB" opacity="0.8">
+                    <animateMotion dur="4.2s" repeatCount="indefinite" href="#path-node1-node5" />
+                  </circle>
+                )}
+                {getNodeData('node-3').status?.toLowerCase() === 'healthy' && getNodeData('node-5').status?.toLowerCase() === 'healthy' && (
+                  <circle r="3" fill="#7C3AED" opacity="0.8">
+                    <animateMotion dur="4s" repeatCount="indefinite" href="#path-node3-node5" />
+                  </circle>
+                )}
               </g>
             )}
 
@@ -373,6 +422,8 @@ export default function DashboardView({
               const isSelected = selectedNodeId === nodeId;
               const isHovered = hoveredNodeId === nodeId;
               const badge = getStatusBadge(node.status);
+              const isPart = (node.status || '').toLowerCase() === 'partitioned';
+              const isRecov = (node.status || '').toLowerCase() === 'recovering';
 
               return (
                 <g
@@ -387,6 +438,9 @@ export default function DashboardView({
                   {node.status === 'healthy' && (
                     <circle r="38" fill="#10B981" opacity={isHovered ? '0.2' : '0.1'} className="pulse-dot" />
                   )}
+                  {isRecov && (
+                    <circle r="38" fill="#7C3AED" opacity={isHovered ? '0.25' : '0.15'} className="pulse-dot" />
+                  )}
 
                   <rect
                     x="-65"
@@ -394,9 +448,10 @@ export default function DashboardView({
                     width="130"
                     height="44"
                     rx="8"
-                    fill={isSelected ? '#EFF6FF' : '#FFFFFF'}
-                    stroke={isSelected ? '#2563EB' : badge.color}
-                    strokeWidth={isSelected ? '2.5' : '1.5'}
+                    fill={isSelected ? '#EFF6FF' : isPart ? '#FFF7ED' : isRecov ? '#F5F3FF' : '#FFFFFF'}
+                    stroke={isSelected ? '#2563EB' : isPart ? '#EA580C' : badge.color}
+                    strokeWidth={isSelected ? '2.5' : isPart ? '2' : '1.5'}
+                    strokeDasharray={isPart ? '4 2' : 'none'}
                     filter={node.status === 'healthy' ? 'url(#glowGreen)' : 'url(#glowRed)'}
                   />
 
@@ -419,9 +474,9 @@ export default function DashboardView({
                   <text
                     x="-48"
                     y="13"
-                    fill="#64748B"
+                    fill={isPart ? '#EA580C' : '#64748B'}
                     fontSize="9"
-                    fontWeight="500"
+                    fontWeight="600"
                     fontFamily="monospace"
                   >
                     :{pos.port} · {badge.label}

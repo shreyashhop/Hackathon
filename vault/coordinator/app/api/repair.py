@@ -26,4 +26,6 @@ async def get_job(job_id: str):
 @router.get("/summary")
 async def get_summary():
     """Returns aggregated repair statistics."""
-    return db.get_repair_summary()
+    summary = db.get_repair_summary()
+    summary["concurrency_limit"] = 3
+    return summary
