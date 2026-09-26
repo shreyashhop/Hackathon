@@ -429,7 +429,16 @@ export default function DashboardView({
                 <g
                   key={nodeId}
                   transform={`translate(${pos.x}, ${pos.y})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Inspect ${nodeId.toUpperCase()}, status: ${node.status || 'unknown'}`}
                   onClick={() => setSelectedNodeId(nodeId)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedNodeId(nodeId);
+                    }
+                  }}
                   onMouseEnter={() => setHoveredNodeId(nodeId)}
                   onMouseLeave={() => setHoveredNodeId(null)}
                   style={{ cursor: 'pointer' }}
@@ -704,10 +713,11 @@ export default function DashboardView({
               target="_blank"
               rel="noreferrer"
               className="btn btn-secondary"
+              aria-label={`Inspect raw health endpoint for ${selectedNode.node_id} in new window`}
               style={{ fontSize: '0.78rem', padding: '6px 12px' }}
             >
               <span>Inspect Health Endpoint</span>
-              <ExternalLink size={12} />
+              <ExternalLink size={12} aria-hidden="true" />
             </a>
           </div>
 

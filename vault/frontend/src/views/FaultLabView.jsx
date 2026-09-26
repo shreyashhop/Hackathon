@@ -258,9 +258,10 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
             onClick={fetchData}
             disabled={loading}
             className="btn btn-secondary"
+            aria-label="Refresh fault simulator cluster state"
             style={{ padding: '8px 16px', fontSize: '0.80rem' }}
           >
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
+            <RefreshCw size={14} aria-hidden="true" className={loading ? 'spin' : ''} />
             <span>Refresh State</span>
           </button>
         </div>
@@ -282,10 +283,12 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
 
           {/* Node Selector */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
+            <label htmlFor="target-fail-node-select" style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
               SELECT TARGET NODE
             </label>
             <select
+              id="target-fail-node-select"
+              aria-label="Select target storage node to simulate failure"
               value={selectedNodeId}
               onChange={(e) => setSelectedNodeId(e.target.value)}
               style={{
@@ -338,9 +341,10 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
               onClick={() => handleNodeAction('stop')}
               disabled={nodeActionLoading || selectedNode.status === 'down'}
               className="btn btn-danger"
+              aria-label={`Simulate failure on node ${selectedNodeId.toUpperCase()}`}
               style={{ flex: 1, padding: '10px 16px', fontSize: '0.82rem' }}
             >
-              <Flame size={14} />
+              <Flame size={14} aria-hidden="true" />
               <span>SIMULATE FAIL</span>
             </button>
 
@@ -348,9 +352,10 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
               onClick={() => handleNodeAction('recover')}
               disabled={nodeActionLoading || selectedNode.status === 'healthy'}
               className="btn btn-primary"
+              aria-label={`Recover storage node ${selectedNodeId.toUpperCase()}`}
               style={{ flex: 1, padding: '10px 16px', fontSize: '0.82rem' }}
             >
-              <RotateCcw size={14} />
+              <RotateCcw size={14} aria-hidden="true" />
               <span>RECOVER NODE</span>
             </button>
           </div>
@@ -385,10 +390,12 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
 
           {/* Object Selector */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
+            <label htmlFor="target-corrupt-obj-select" style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
               TARGET OBJECT
             </label>
             <select
+              id="target-corrupt-obj-select"
+              aria-label="Target object for physical byte corruption"
               value={selectedObjectId}
               onChange={(e) => setSelectedObjectId(e.target.value)}
               style={{
@@ -415,10 +422,12 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
 
           {/* Replica Selector */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
+            <label htmlFor="target-corrupt-rep-select" style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#172033', marginBottom: '6px' }}>
               TARGET REPLICA NODE
             </label>
             <select
+              id="target-corrupt-rep-select"
+              aria-label="Target replica node for physical byte corruption"
               value={selectedReplicaNode}
               onChange={(e) => setSelectedReplicaNode(e.target.value)}
               disabled={availableReplicas.length === 0}
@@ -466,9 +475,10 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
             onClick={handleCorruptReplica}
             disabled={corruptActionLoading || !selectedObjectId || !selectedReplicaNode}
             className="btn btn-danger"
+            aria-label={`Corrupt replica on node ${selectedReplicaNode} for target object`}
             style={{ padding: '10px 16px', fontSize: '0.82rem', marginTop: 'auto' }}
           >
-            <AlertTriangle size={14} />
+            <AlertTriangle size={14} aria-hidden="true" />
             <span>CORRUPT REPLICA DISK BYTES</span>
           </button>
 
@@ -591,10 +601,12 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
           }}
         >
           <div>
-            <label style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
+            <label htmlFor="target-part-node-select" style={{ fontSize: '0.74rem', color: '#475569', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
               TARGET STORAGE NODE
             </label>
             <select
+              id="target-part-node-select"
+              aria-label="Select target storage node to partition"
               value={selectedPartitionNodeId}
               onChange={(e) => setSelectedPartitionNodeId(e.target.value)}
               className="form-input"
@@ -609,11 +621,12 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
           </div>
 
           <div>
-            <label style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
+            <label style={{ fontSize: '0.74rem', color: '#475569', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
               CURRENT STATE
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', height: '38px' }}>
               <span
+                aria-label={`Target node ${selectedPartitionNodeId.toUpperCase()}, current state: ${(selectedPartitionNode.status || 'UNKNOWN').toUpperCase()}`}
                 style={{
                   fontSize: '0.80rem',
                   fontFamily: 'var(--font-mono)',
@@ -643,6 +656,7 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
               onClick={() => handlePartitionAction('restore')}
               disabled={partitionActionLoading}
               className="btn btn-primary"
+              aria-label={`Restore network communication to node ${selectedPartitionNodeId.toUpperCase()}`}
               style={{
                 padding: '10px 20px',
                 fontSize: '0.86rem',
@@ -650,7 +664,7 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
                 borderColor: '#6D28D9',
               }}
             >
-              <RotateCcw size={15} className={partitionActionLoading ? 'spin' : ''} />
+              <RotateCcw size={15} aria-hidden="true" className={partitionActionLoading ? 'spin' : ''} />
               <span>{partitionActionLoading ? 'Restoring Network...' : 'RESTORE NETWORK'}</span>
             </button>
           ) : (
@@ -658,6 +672,7 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
               onClick={() => handlePartitionAction('partition')}
               disabled={partitionActionLoading}
               className="btn"
+              aria-label={`Partition node ${selectedPartitionNodeId.toUpperCase()}`}
               style={{
                 padding: '10px 20px',
                 fontSize: '0.86rem',
@@ -667,7 +682,7 @@ export default function FaultLabView({ coordinatorBaseUrl = '', onRefreshCluster
                 fontWeight: 700,
               }}
             >
-              <AlertTriangle size={15} />
+              <AlertTriangle size={15} aria-hidden="true" />
               <span>{partitionActionLoading ? 'Partitioning...' : 'PARTITION NODE'}</span>
             </button>
           )}

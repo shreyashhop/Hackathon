@@ -31,6 +31,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -107,6 +108,21 @@ export default function App() {
           try {
             const data = JSON.parse(event.data);
             setEvents((prev) => [data, ...prev.slice(0, 49)]);
+
+            // Accessible screen reader announcement for significant milestones
+            if (data.event_type === 'NODE_DOWN') {
+              setLiveAnnouncement(`Storage node ${data.node_id} is down.`);
+            } else if (data.event_type === 'NODE_HEALTHY' || data.event_type === 'NODE_RECOVERED') {
+              setLiveAnnouncement(`Storage node ${data.node_id} is now healthy.`);
+            } else if (data.event_type === 'NODE_PARTITIONED') {
+              setLiveAnnouncement(`Storage node ${data.node_id} has been network partitioned.`);
+            } else if (data.event_type === 'REPAIR_COMPLETED' || data.event_type === 'RECONCILIATION_COMPLETED') {
+              setLiveAnnouncement(`Replica repair completed for object ${data.object_name || data.object_id || ''}.`);
+            } else if (data.event_type === 'INTEGRITY_SCAN_COMPLETED') {
+              setLiveAnnouncement('Data integrity audit scan completed.');
+            } else if (data.event_type === 'OBJECT_STORED') {
+              setLiveAnnouncement(`Object ${data.object_name || data.object_id || ''} stored successfully.`);
+            }
 
             // Trigger node refresh if cluster state or object storage changed
             if ([
@@ -202,6 +218,16 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {/* Skip to Main Content Link for Keyboard Navigation */}
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+
+      {/* Screen Reader Live Region for Milestones */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {liveAnnouncement}
+      </div>
+
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -221,7 +247,7 @@ export default function App() {
           lastUpdated={lastUpdated}
         />
 
-        <main className="content-scrollable">
+        <main id="main-content" className="content-scrollable">
           {currentTab === 'dashboard' && (
             <DashboardView
               nodes={nodes}

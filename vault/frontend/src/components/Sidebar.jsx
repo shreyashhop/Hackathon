@@ -39,11 +39,11 @@ const NAV_GROUPS = [
 
 export default function Sidebar({ currentTab, onSelectTab, nodeCount = 5, healthyNodeCount = 5 }) {
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="Sidebar">
       {/* Brand Header */}
       <div className="sidebar-brand">
         <div className="vault-logo-glyph">
-          <Layers size={22} strokeWidth={2.4} />
+          <Layers size={22} strokeWidth={2.4} aria-hidden="true" />
         </div>
         <div>
           <div className="vault-brand-title">
@@ -70,7 +70,7 @@ export default function Sidebar({ currentTab, onSelectTab, nodeCount = 5, health
       </div>
 
       {/* Navigation Sections */}
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="Primary navigation">
         {NAV_GROUPS.map((group, gIdx) => (
           <div key={gIdx} style={{ marginBottom: '8px' }}>
             <div className="nav-section-label">{group.title}</div>
@@ -84,7 +84,7 @@ export default function Sidebar({ currentTab, onSelectTab, nodeCount = 5, health
                   className={`nav-item ${isActive ? 'active' : ''}`}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} className="nav-icon" />
+                  <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} className="nav-icon" aria-hidden="true" />
                   <span>{item.label}</span>
 
                   {item.hasBadge && (
@@ -108,15 +108,15 @@ export default function Sidebar({ currentTab, onSelectTab, nodeCount = 5, health
       {/* Footer System Specs */}
       <div className="sidebar-footer">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#94A3B8' }}>TOPOLOGY</span>
+          <span style={{ color: '#475569' }}>TOPOLOGY</span>
           <span style={{ fontWeight: 600, color: '#172033' }}>5 Nodes + Coord</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#94A3B8' }}>POLICY</span>
+          <span style={{ color: '#475569' }}>POLICY</span>
           <span style={{ fontWeight: 600, color: '#2563EB' }}>RF=3 · W=2 (HRW)</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#94A3B8' }}>INTEGRITY</span>
+          <span style={{ color: '#475569' }}>INTEGRITY</span>
           <span style={{ fontWeight: 600, color: '#10B981' }}>SHA-256 Verifier</span>
         </div>
       </div>

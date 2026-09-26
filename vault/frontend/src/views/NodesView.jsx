@@ -103,13 +103,15 @@ export default function NodesView({ nodes = [], onRefresh, refreshing }) {
               key={statusKey}
               onClick={() => setFilter(statusKey)}
               className="btn"
+              aria-pressed={filter === statusKey}
+              aria-label={`Filter by ${statusKey.toLowerCase()} status`}
               style={{
                 padding: '5px 12px',
                 fontSize: '0.75rem',
                 fontFamily: 'var(--font-mono)',
                 background: filter === statusKey ? '#EFF6FF' : '#FFFFFF',
                 borderColor: filter === statusKey ? '#BFDBFE' : '#E2E8F0',
-                color: filter === statusKey ? '#2563EB' : '#64748B',
+                color: filter === statusKey ? '#2563EB' : '#475569',
                 fontWeight: filter === statusKey ? 700 : 500,
               }}
             >
@@ -231,9 +233,10 @@ export default function NodesView({ nodes = [], onRefresh, refreshing }) {
                       onClick={() => handleRecoverNode(node.node_id)}
                       disabled={actionPending === node.node_id}
                       className="btn btn-primary"
+                      aria-label={`Recover storage node ${node.node_id}`}
                       style={{ flex: 1, padding: '6px 12px', fontSize: '0.76rem' }}
                     >
-                      <RotateCcw size={13} />
+                      <RotateCcw size={13} aria-hidden="true" />
                       <span>{actionPending === node.node_id ? 'Recovering...' : 'Recover Node'}</span>
                     </button>
                   ) : (
@@ -241,9 +244,10 @@ export default function NodesView({ nodes = [], onRefresh, refreshing }) {
                       onClick={() => handleStopNode(node.node_id)}
                       disabled={actionPending === node.node_id}
                       className="btn btn-danger"
+                      aria-label={`Simulate failure on storage node ${node.node_id}`}
                       style={{ flex: 1, padding: '6px 12px', fontSize: '0.76rem' }}
                     >
-                      <PowerOff size={13} />
+                      <PowerOff size={13} aria-hidden="true" />
                       <span>{actionPending === node.node_id ? 'Stopping...' : 'Simulate Fail'}</span>
                     </button>
                   )}
@@ -251,9 +255,11 @@ export default function NodesView({ nodes = [], onRefresh, refreshing }) {
                   <button
                     onClick={() => setInspectedNodeId(isInspected ? null : node.node_id)}
                     className="btn"
+                    aria-expanded={isInspected}
+                    aria-label={`${isInspected ? 'Collapse' : 'Expand'} telemetry details for ${node.node_id}`}
                     style={{ padding: '6px 10px', fontSize: '0.76rem' }}
                   >
-                    {isInspected ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    {isInspected ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
                   </button>
                 </div>
 

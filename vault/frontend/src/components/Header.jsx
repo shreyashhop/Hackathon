@@ -25,17 +25,17 @@ export default function Header({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {isOptimal ? (
             <span className="status-pill healthy">
-              <span className="pulse-dot"></span>
+              <span className="pulse-dot" aria-hidden="true"></span>
               CLUSTER HEALTHY ({healthyCount}/{totalNodes})
             </span>
           ) : isDegraded ? (
             <span className="status-pill warning">
-              <span className="pulse-dot"></span>
+              <span className="pulse-dot" aria-hidden="true"></span>
               DEGRADED ({healthyCount}/{totalNodes})
             </span>
           ) : (
             <span className="status-pill failure">
-              <span className="pulse-dot"></span>
+              <span className="pulse-dot" aria-hidden="true"></span>
               OFFLINE (0/{totalNodes})
             </span>
           )}
@@ -58,7 +58,7 @@ export default function Header({
             borderRadius: 'var(--radius-sm)',
           }}
         >
-          <Server size={14} style={{ color: coordinatorHealthy ? 'var(--status-healthy)' : 'var(--status-failure)' }} />
+          <Server size={14} aria-hidden="true" style={{ color: coordinatorHealthy ? 'var(--status-healthy)' : 'var(--status-failure)' }} />
           <span style={{ color: 'var(--text-muted)' }}>COORDINATOR:</span>
           <span style={{ fontWeight: 700, color: coordinatorHealthy ? 'var(--status-healthy)' : 'var(--status-failure)' }}>
             {coordinatorHealthy ? 'ONLINE' : 'UNREACHABLE'}
@@ -79,7 +79,7 @@ export default function Header({
             borderRadius: 'var(--radius-sm)',
           }}
         >
-          <Radio size={14} style={{ color: wsConnected ? '#2563EB' : 'var(--text-dim)' }} />
+          <Radio size={14} aria-hidden="true" style={{ color: wsConnected ? '#2563EB' : 'var(--text-dim)' }} />
           <span style={{ color: 'var(--text-muted)' }}>EVENT BUS:</span>
           <span style={{ fontWeight: 700, color: wsConnected ? '#2563EB' : 'var(--text-muted)' }}>
             {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
@@ -107,6 +107,7 @@ export default function Header({
           onClick={onRefresh}
           disabled={refreshing}
           className="btn"
+          aria-label="Synchronize cluster telemetry"
           style={{
             padding: '6px 14px',
             fontSize: '0.80rem',
@@ -117,6 +118,7 @@ export default function Header({
         >
           <RefreshCw
             size={13}
+            aria-hidden="true"
             style={{
               animation: refreshing ? 'spin 0.8s linear infinite' : 'none',
               color: refreshing ? '#2563EB' : 'inherit',

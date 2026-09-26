@@ -282,18 +282,21 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <input
+            id="object-file-upload"
             type="file"
             ref={fileInputRef}
             onChange={handleFileSelect}
             style={{ display: 'none' }}
+            aria-label="Upload physical object file to cluster"
           />
 
           <button
             onClick={() => fileInputRef.current?.click()}
             className="btn btn-primary"
+            aria-label="Upload physical object file"
             style={{ padding: '8px 18px', fontSize: '0.84rem' }}
           >
-            <Upload size={16} />
+            <Upload size={16} aria-hidden="true" />
             <span>Upload Object</span>
           </button>
 
@@ -301,9 +304,10 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
             onClick={fetchObjects}
             disabled={loading}
             className="btn"
+            aria-label="Refresh object catalog"
             style={{ padding: '8px 14px' }}
           >
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
+            <RefreshCw size={14} aria-hidden="true" className={loading ? 'spin' : ''} />
             <span>Refresh</span>
           </button>
         </div>
@@ -433,8 +437,10 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
 
       {/* Search Bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#FFFFFF', padding: '10px 16px', borderRadius: 'var(--radius-md)', border: '1px solid #E2E8F0', boxShadow: 'var(--shadow-xs)' }}>
-        <Search size={16} color="#94A3B8" />
+        <Search size={16} color="#475569" aria-hidden="true" />
         <input
+          id="object-search-input"
+          aria-label="Filter objects by name, SHA-256 hash, or ID"
           type="text"
           placeholder="Filter by object name, SHA-256, or ID..."
           value={searchQuery}
@@ -452,7 +458,8 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
         {searchQuery && (
           <button
             onClick={() => setSearchQuery('')}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94A3B8', fontSize: '0.8rem' }}
+            aria-label="Clear object search filter"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#475569', fontSize: '0.8rem' }}
           >
             Clear
           </button>
@@ -541,9 +548,10 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
                       onClick={() => handleDownload(obj)}
                       disabled={actionInProgress[obj.object_id]}
                       className="btn btn-secondary"
+                      aria-label={`Download ${obj.object_name}`}
                       style={{ padding: '6px 12px', fontSize: '0.78rem' }}
                     >
-                      <Download size={13} />
+                      <Download size={13} aria-hidden="true" />
                       <span>{actionInProgress[obj.object_id] === 'downloading' ? 'Fetching...' : 'Download'}</span>
                     </button>
 
@@ -551,19 +559,22 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
                       onClick={() => handleDelete(obj)}
                       disabled={actionInProgress[obj.object_id]}
                       className="btn btn-danger"
+                      aria-label={`Delete ${obj.object_name}`}
                       style={{ padding: '6px 12px', fontSize: '0.78rem' }}
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={13} aria-hidden="true" />
                       <span>Delete</span>
                     </button>
 
                     <button
                       onClick={() => setExpandedObjectId(isExpanded ? null : obj.object_id)}
                       className="btn"
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} replicas for ${obj.object_name}`}
                       style={{ padding: '6px 12px', fontSize: '0.78rem' }}
                     >
                       <span>Replicas ({replicas.length})</span>
-                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                      {isExpanded ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
                     </button>
                   </div>
                 </div>
@@ -584,17 +595,18 @@ export default function ObjectsView({ coordinatorBaseUrl = '', onRefreshNodes })
                 >
                   {/* SHA-256 with copy */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
-                    <span style={{ color: '#94A3B8', fontWeight: 600 }}>SHA-256:</span>
+                    <span style={{ color: '#475569', fontWeight: 600 }}>SHA-256:</span>
                     <span style={{ color: '#172033', fontWeight: 500 }}>
                       {obj.sha256 ? `${obj.sha256.slice(0, 24)}...` : '—'}
                     </span>
                     {obj.sha256 && (
                       <button
                         onClick={() => copyToClipboard(obj.sha256, obj.object_id)}
+                        aria-label={`Copy SHA-256 hash for ${obj.object_name}`}
                         style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#2563EB', display: 'flex', alignItems: 'center' }}
                         title="Copy full SHA-256"
                       >
-                        {copiedHash === obj.object_id ? <Check size={12} color="#10B981" /> : <Copy size={12} />}
+                        {copiedHash === obj.object_id ? <Check size={12} color="#10B981" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
                       </button>
                     )}
                   </div>
